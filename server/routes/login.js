@@ -1,6 +1,7 @@
 const router = require("express").Router();
+
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
+const jwt = require("jsonwebtoken"); 
 const pn = require('../conexionBD');
 
 
@@ -24,19 +25,27 @@ const sqllistacorreos = `SELECT correo FROM usuario where correo = $1`
 
 
 router.post("/registro", async (req, res) => {
+
 	try {
 
 		let { nombre, correo, password, passwordCheck, rol } = req.body;
+		
 		console.log(typeof (rol))
 
 		if (!nombre || !correo || !password || !passwordCheck || !rol)
 			return res.status(400).json({ mensaje: "No ha ingresado todos los campos necesarios." });
+
 		if (password.length < 5)
 			return res.json({ msg: "La contraseña debe tener al menos 5 caracteres." }, 400);
 		if (password !== passwordCheck)
 			return res.json({ msg: "Ingrese la misma contraseña dos veces para verificación." }, 400);
 
 		console.log(rol)
+
+		if (rol != "cliente" && rol != "veterinario") {
+
+			return res.status(400).json({ msg: "ingresee uno de los siguientes roles: cliente o veterinario" })
+		}
 
 		const passwordHash = await hashPassword(password)
 		const newUser = { nombre, correo, password: passwordHash, roles: [rol] };
@@ -64,47 +73,49 @@ router.post("/registro", async (req, res) => {
 	}
 });
 
-
+//-----------------------------------------------------------------------
 
 router.post("/login", async (req, res) => {
 	try {
 		const { correo, password, token } = req.body;
 
-
+		
 		if (!correo)
-			return res.status(400).json({ msg: "Ingrese el correo con el que se registro." });
-
-		const dbUser = await pn.oneOrNone(`SELECT * FROM usuario WHERE correo = $1`, [correo]);
-
-		if (dbUser == null)
+		return res.status(400).json({ msg: "Ingrese el correo con el que se registro." });
+		
+		//const dbUser = await pn.oneOrNone(`SELECT * FROM usuario WHERE correo = $1`, [correo]);
+		
+		const sql = 'select  usuario.id, usuario.password, rol.nombre as rol , usuario.nombre, correo, origen_cuenta ' +
+		'FROM usuario inner join r_rol_usuario rru on usuario.id = rru.id_usuario inner join rol on rru.id_rol = rol.id' +
+		' WHERE correo = ${correo}'
+		const dbUser = await pn.one(sql, { correo })
+		dbUser.roles = [dbUser.rol]
+		
+			
+			if (dbUser == null)
 			return res.status(400).json({ msg: "Aun no se ha registrado, correo no encontrado" })
-		console.log(dbUser);
-
-		if (rolestabla != "cliente" && rolestabla != "veterinario") {
-
-			return res.status(400).json({ msg: "ingresee uno de los siguientes roles: cliente o veterinario" })
-		}
-
-		if (dbUser.activo == false)
+			console.log(dbUser);
+			
+			if (dbUser.activo == false)
 			return res.status(400).json({ msg: "usuario inactivo." });
-
-		if (password != null) {
-			const hashLogin = await hashPassword(password)
-			console.log(hashLogin)
-			// compara el password
-			let comparacion = hashLogin === dbUser.password
-			if (!comparacion) return res.status(400).json({ mensaje: "Password incorrecto" });
-			console.log(process.env.JWT_SECRET);
-
-			console.log(dbUser)
-		}
-
-
-
-		const tokenGenerado = jwt.sign({
+			
+			if (password != null) {
+				const hashLogin = await hashPassword(password)
+				console.log(hashLogin)
+				// compara el password
+				let comparacion = hashLogin === dbUser.password
+				if (!comparacion) return res.status(400).json({ mensaje: "Password incorrecto" });
+				
+				console.log(dbUser)
+			}
+			
+			
+			
+		const tokenGenerado = jwt.sign({ //creando el token de ingreso
 			nombre: dbUser.nombre,
 			correo: dbUser.correo,
-			id: dbUser.id
+			id: dbUser.id,
+			roles: dbUser.roles
 		},
 			process.env.JWT_SECRET);// firma el token genera_
 
@@ -115,54 +126,10 @@ router.post("/login", async (req, res) => {
 	}
 });
 
-const autenticacionMiddleware = async (req, res, next) => {
-	const header = req.headers['authorization'] //Authorization : Bearer <token>
-	if (typeof header === 'undefined') {
-		console.log(`No se encontró el header de autenticación`)
-		return res.sendStatus(403); // codigo no permitido
-	}
-	// console.log(`Header de autenticación -> ${header}`)
-	const bearer = header.split(" "); // partidos en dos los headers
-	const bearerToken = bearer[1]; // y cogemos la ultima parte
-	req.token = bearerToken; // la que guardamos en la variable
-	try {
-		await jwt.verify(req.token, process.env.JWT_SECRET)
-	} catch (e) {
-		console.log(`Error de verificación de token ${e.message}`)
-		return res.sendStatus(403)
-	}
-	const usuario = jwt.decode(bearerToken)
-	req.user = usuario
-	next();
-}
+
 
 //CONFIG  de google
 
-async function verify(token) {
-	const ticket = await client.verifyIdToken({
-		idToken: token,
-		audience: process.env.CLIENT_ID,  // Specify the CLIENT_ID of the app that accesses the backend
-		// Or, if multiple clients access the backend:
-		//[CLIENT_ID_1, CLIENT_ID_2, CLIENT_ID_3]
-	});
-	const payload = ticket.getPayload();
-
-	console.log(payload.name);
-	console.log(payload.email);
-	//const userid = payload['sub'];
-	// If request specified a G Suite domain:
-	// const domain = payload['hd'];
-
-	return {
-		nombre: payload.name,
-		email: payload.email,
-		//img: payload.picture,
-
-	}
-}
-//verify().catch(console.error);
-
-//
 
 function obtenerToken(req) {
 
@@ -195,7 +162,7 @@ async function buscarUsuario(usuarioToken) {
 			'FROM usuario inner join r_rol_usuario rru on usuario.id = rru.id_usuario inner join rol on rru.id_rol = rol.id' +
 			' WHERE correo = ${correo}'
 		const resultado = await pn.one(sql, { correo: usuarioToken.email })
-		return { ...resultado, roles: [resultado.rol] } // creo un objecto, con todas las propiedades que viene de resultado co el adicional roles
+		return { ...resultado, roles: [resultado.rol] } // creo un objecto, con todas las propiedades que viene de resultado co el adicional
 	} catch (e) {
 		if (e.code === 0) return null
 		else throw e
@@ -273,5 +240,5 @@ router.post("/registrogoogle", async (req, res) => {
 
 
 
-module.exports = { router, autenticacionMiddleware };
+module.exports = { router };
 
